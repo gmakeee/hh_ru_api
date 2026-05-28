@@ -9,6 +9,7 @@ interface Candidate {
   summary: string | null;
   raw_data: any;
   created_at: string;
+  prompt_id: number | null;
 }
 
 function StatusBadge({ status }: { status: string }) {
@@ -128,9 +129,16 @@ export default async function DashboardPage() {
                       </td>
                       <td className="px-6 py-4">
                         {candidate.score !== null ? (
-                          <div className="flex items-baseline gap-1">
-                            <span className="font-bold text-lg text-white">{candidate.score}</span>
-                            <span className="text-xs text-zinc-500">/100</span>
+                          <div>
+                            <div className="flex items-baseline gap-1 mb-1">
+                              <span className="font-bold text-lg text-white">{candidate.score}</span>
+                              <span className="text-xs text-zinc-500">/100</span>
+                            </div>
+                            {candidate.prompt_id && (
+                              <div className="text-[10px] text-purple-400 font-mono bg-purple-500/10 inline-block px-1.5 py-0.5 rounded border border-purple-500/20">
+                                PROMPT #{candidate.prompt_id}
+                              </div>
+                            )}
                           </div>
                         ) : (
                           <span className="text-zinc-600 font-medium">-</span>

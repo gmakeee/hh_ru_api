@@ -1,22 +1,29 @@
 import { getSettings } from '@/app/actions/settings';
+import { supabaseAdmin } from '@/lib/supabase/adminClient';
 import SettingsForm from './SettingsForm';
+import PromptCompiler from './PromptCompiler';
+import PromptSelector from './PromptSelector';
 
-// Server Component
 export default async function SettingsPage() {
-  // Получаем начальные данные из БД перед рендерингом
   const initialData = await getSettings();
+  
+  const { data: prompts } = await supabaseAdmin
+    .from('prompts')
+    .select('*')
+    .order('id', { ascending: false });
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-8 pb-12">
       <div>
-        <h1 className="text-2xl font-bold text-white">Settings</h1>
+        <h1 className="text-2xl font-bold text-white">Settings & AI Compiler</h1>
         <p className="mt-1 text-sm text-zinc-400">
-          Manage your external API tokens and core application settings.
+          Manage system configurations, compile new AI prompts based on company needs, and select active evaluation profiles.
         </p>
       </div>
 
-      {/* Передаем данные в клиентский компонент формы */}
       <SettingsForm initialData={initialData} />
+      <PromptCompiler />
+      <PromptSelector prompts={prompts || []} activePromptId={initialData?.active_prompt_id} />
     </div>
   );
 }

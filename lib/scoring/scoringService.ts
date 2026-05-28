@@ -49,15 +49,24 @@ export async function runScoringPipeline(): Promise<void> {
   await logSystemEvent('info', 'Starting runScoringPipeline.');
 
   try {
-    // 1. Fetch Config: Получаем системный промпт
+    // 1. Fetch Config: Получаем системный промпт через JOIN
     const { data: appSettings, error: configError } = await supabaseAdmin
       .from('app_settings')
-      .select('master_prompt')
+      .select(`
+        active_prompt_id,
+        prompts (
+          id,
+          prompt_text
+        )
+      `)
       .eq('id', 1)
       .maybeSingle();
 
-    if (configError || !appSettings || !appSettings.master_prompt) {
-      throw new Error('master_prompt is missing in app_settings or database error occurred.');
+    const activePromptId = appSettings?.active_prompt_id;
+    const masterPrompt = (appSettings?.prompts as any)?.prompt_text;
+
+    if (configError || !appSettings || !activePromptId || !masterPrompt) {
+      throw new Error('active_prompt is missing in app_settings or database error occurred.');
     }
 
     // 2. Fetch API Key
@@ -98,7 +107,7 @@ export async function runScoringPipeline(): Promise<void> {
 
         // LLM Payload Construction
         // Инструктируем модель возвращать СТРОГО JSON
-        const systemPrompt = `${appSettings.master_prompt}\n\nCRITICAL INSTRUCTION: You must return ONLY valid JSON containing two fields: "score" (a number) and "summary" (a string). Do not wrap the JSON in markdown blocks (like \`\`\`json) or include any other text.`;
+        const systemPrompt = `${masterPrompt}\n\nCRITICAL INSTRUCTION: You must return ONLY valid JSON containing two fields: "score" (a number) and "summary" (a string). Do not wrap the JSON in markdown blocks (like \`\`\`json) or include any other text.`;
         
         const userData = JSON.stringify({
           messages: candidate.raw_data?.messages || [],
@@ -160,7 +169,8 @@ export async function runScoringPipeline(): Promise<void> {
           .update({
             status: 'scored',
             score: parsedResult.score,
-            summary: parsedResult.summary
+            summary: parsedResult.summary,
+            prompt_id: activePromptId
           })
           .eq('id', candidate.id);
 
