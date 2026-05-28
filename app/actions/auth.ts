@@ -13,7 +13,7 @@ export async function loginAction(formData: FormData) {
 
   if (password === adminPassword) {
     // Устанавливаем HTTP-only куку на 1 неделю
-    cookies().set('admin_session', 'authenticated', {
+    (await cookies()).set('admin_session', 'authenticated', {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
       sameSite: 'strict',
@@ -28,6 +28,6 @@ export async function loginAction(formData: FormData) {
 }
 
 export async function logoutAction() {
-  cookies().delete('admin_session');
+  (await cookies()).delete('admin_session');
   redirect('/login');
 }
