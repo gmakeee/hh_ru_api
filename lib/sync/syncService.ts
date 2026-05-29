@@ -23,8 +23,12 @@ async function logSystemEvent(level: 'info' | 'warning' | 'error', message: stri
 
 /**
  * Запускает процесс синхронизации для новых кандидатов.
+ *
+ * @param limit - Максимальное количество НОВЫХ кандидатов за один запуск.
+ *                Не считает уже существующих в БД (они пропускаются без паузы).
+ *                Undefined = без ограничений.
  */
-export async function runSyncNew(): Promise<void> {
+export async function runSyncNew(limit?: number): Promise<void> {
   await logSystemEvent('info', 'Starting runSyncNew pipeline.');
 
   try {
@@ -82,6 +86,15 @@ export async function runSyncNew(): Promise<void> {
         }
 
         // Fetch Details & Insert: Кандидат новый, скачиваем детали
+        // Limit guard: stop after inserting N new candidates
+        if (limit !== undefined && newCandidatesCount >= limit) {
+          await logSystemEvent(
+            'info',
+            `Sync limit of ${limit} reached. Stopping early.`,
+          );
+          break;
+        }
+
         newCandidatesCount++;
         
         // Скачиваем историю переписки
@@ -93,19 +106,25 @@ export async function runSyncNew(): Promise<void> {
             resumeData = await hhService.getResume(negotiation.resume.id);
         }
 
-        // Вставляем новую запись в БД
+        // Вставляем новую запись в БД.
+        // raw_cv_data      — резюме кандидата (читает anonymizeCandidateData() перед LLM)
+        // raw_chat_history — история переписки (читает anonymizeCandidateData() перед LLM)
+        // raw_data         — полный снимок для справки (UI, отладка)
         const { error: insertError } = await supabaseAdmin
           .from('candidates')
           .insert({
             hh_negotiation_id: negotiation.id,
-            status: 'pending',
+            status:            'pending',
+            raw_cv_data:       resumeData ?? null,
+            raw_chat_history:  messages   ?? null,
             raw_data: {
               negotiation: negotiation,
-              messages: messages,
-              resume: resumeData
+              messages:    messages,
+              resume:      resumeData,
             },
             created_at: new Date().toISOString(),
           });
+
 
         if (insertError) {
           throw insertError;

@@ -83,8 +83,16 @@ export async function runScoringPipeline(): Promise<void> {
     const autoRejectThreshold = (appSettings as any)?.auto_reject_threshold as number ?? 30;
 
     if (configError || !appSettings || !activePromptId || !masterPrompt) {
-      throw new Error('active_prompt is missing in app_settings or database error occurred.');
+      throw new Error(
+        'active_prompt is missing in app_settings or database error occurred. ' +
+        'Ensure app_settings.active_prompt_id points to a valid row in the prompts table.',
+      );
     }
+
+    // NOTE: masterPrompt comes from prompts.prompt_text (via JOIN on active_prompt_id),
+    // NOT from app_settings.meta_prompt. The Settings UI writes to the active prompt
+    // in the prompts table — if scoring seems to ignore settings changes, verify
+    // that active_prompt_id in app_settings matches the prompt being edited.
 
     // 2. Initialize HH client (token validated / refreshed by tokenManager)
     const hhAccessToken = await getValidAccessToken();
@@ -158,13 +166,15 @@ export async function runScoringPipeline(): Promise<void> {
         };
 
         // OpenRouter API Call
+        // APP_URL is used as Referer so OpenRouter can attribute usage to this project.
+        const appUrl = process.env.APP_URL || 'https://localhost:3000';
         const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
           method: 'POST',
           headers: {
             'Authorization': `Bearer ${openRouterApiKey}`,
             'Content-Type': 'application/json',
-            'HTTP-Referer': 'https://candidate-scorer.local', // Обязательное поле для OpenRouter
-            'X-Title': 'Candidate Scorer Pipeline' 
+            'HTTP-Referer': appUrl,
+            'X-Title': 'Candidate Scorer Pipeline'
           },
           body: JSON.stringify(requestPayload)
         });

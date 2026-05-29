@@ -115,13 +115,43 @@ export class HhApiService {
   }
 
   /**
-   * Fetches the list of active applications (negotiations)
+   * Fetches ALL active negotiations across all HH.ru pages.
+   *
+   * HH.ru uses 0-based pagination. The response envelope contains:
+   *   { items: [...], found: N, pages: P, per_page: 50, page: 0 }
+   *
+   * We loop until page >= pages (i.e., no more pages left).
+   * A 500ms sleep between page requests avoids 429 Too Many Requests.
+   *
+   * @param perPage - Results per page (max 100 on HH.ru, 50 is safe)
    */
-  async getNegotiations(): Promise<HhNegotiation[]> {
-    const url = `${this.baseUrl}/negotiations`;
-    const data = await this.fetchWithRetry(url);
-    // Assuming the API returns a paginated list with an 'items' array
-    return data.items || [];
+  async getNegotiations(perPage = 50): Promise<HhNegotiation[]> {
+    const all: HhNegotiation[] = [];
+    let page = 0;
+
+    while (true) {
+      const url = `${this.baseUrl}/negotiations?page=${page}&per_page=${perPage}`;
+      const data = await this.fetchWithRetry(url);
+
+      const items: HhNegotiation[] = data.items || [];
+      all.push(...items);
+
+      const totalPages: number = data.pages ?? 1;
+
+      // HH.ru pages are 0-indexed: last page = totalPages - 1
+      if (page >= totalPages - 1 || items.length === 0) break;
+
+      page++;
+
+      // Throttle: 500ms between page requests to stay within HH.ru rate limits
+      const { sleep } = await import('@/lib/utils/sleep');
+      await sleep(500);
+    }
+
+    console.info(
+      `[HhApiService] getNegotiations: fetched ${all.length} negotiations across ${page + 1} page(s).`,
+    );
+    return all;
   }
 
   /**

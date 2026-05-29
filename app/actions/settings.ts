@@ -81,6 +81,10 @@ export async function updateSystemSettings(prevState: FormState, formData: FormD
         meta_prompt,
         auto_reject_enabled,
         auto_reject_threshold,
+        // When saving a token manually, reset the expiry to null.
+        // tokenManager.isTokenFresh(null) returns true → treats it as a
+        // legacy static token and never attempts to auto-refresh it.
+        hh_token_expires_at: null,
       })
       .eq('id', 1);
 

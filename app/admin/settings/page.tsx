@@ -3,6 +3,8 @@ import { supabaseAdmin } from '@/lib/supabase/adminClient';
 import SettingsForm from './SettingsForm';
 import PromptCompiler from './PromptCompiler';
 import PromptSelector from './PromptSelector';
+import SyncTester from './SyncTester';
+
 
 export default async function SettingsPage() {
   const initialData = await getSettings();
@@ -22,8 +24,10 @@ export default async function SettingsPage() {
       </div>
 
       <SettingsForm initialData={initialData} />
+      <SyncTester />
       <PromptCompiler />
       <PromptSelector prompts={prompts || []} activePromptId={initialData?.active_prompt_id} />
+
     </div>
   );
 }

@@ -31,14 +31,14 @@ export async function compilePromptAction(companyNeeds: string) {
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${openRouterKey}`,
-        'HTTP-Referer': 'https://hh-ru-api.vercel.app',
+        'HTTP-Referer': process.env.APP_URL || 'https://localhost:3000',
         'X-Title': 'Candidate Scoring Pipeline'
       },
       body: JSON.stringify({
         model: 'google/gemini-2.5-flash', 
         messages: [
           { role: 'system', content: metaPrompt },
-          { role: 'user', content: `Вот наши текущие бизнес-задачи и требования (Company Needs):\n${companyNeeds}\n\nСгенерируй финальный поисковый промпт для LLM, которая будет читать резюме кандидата. Требуй выдачу ТОЛЬКО в формате JSON с полями "score" (0-100) и "summary".` }
+          { role: 'user', content: `Вот наши текущие бизнес-задачи и требования (Company Needs):\n${companyNeeds}\n\nСгенерируй финальный системный промпт для LLM, которая будет оценивать резюме кандидата. Промпт ОБЯЗАН требовать ответ СТРОГО в формате JSON с шестью полями:\n- "score" (number, 0-100): общий балл\n- "summary" (string): краткое резюме оценки\n- "tech_skills" (number, 0-100): технические навыки\n- "soft_skills" (number, 0-100): коммуникация и командная работа\n- "experience_match" (number, 0-100): соответствие опыта вакансии\n- "interview_questions" (array of exactly 3 strings): персонализированные вопросы для интервью\nВерни ТОЛЬКО текст промпта, без пояснений и markdown.` }
         ]
       })
     });
