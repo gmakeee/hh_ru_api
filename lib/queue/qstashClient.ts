@@ -2,11 +2,11 @@
  * @file lib/queue/qstashClient.ts
  * @description QStash Publisher Utility.
  *
- * Single responsibility: publish a message to the QStash queue that instructs
- * the receiver endpoint (/api/queue/score) to run the LLM scoring pipeline.
+ * Exports two publisher functions:
+ *   - triggerScoringJob()   — signals the LLM scoring pipeline (no payload)
+ *   - triggerMessageJob()   — schedules a single candidate message with a delay
  *
- * The receiver pulls its own data from Supabase autonomously, so the published
- * message body can be empty — we are sending a signal, not a payload.
+ * The receiver endpoints pull their own data from Supabase autonomously.
  */
 
 import { Client } from '@upstash/qstash';
@@ -17,9 +17,8 @@ import { Client } from '@upstash/qstash';
 
 /**
  * Lazily-validated QStash client.
- * We defer the env-var check to call time (inside triggerScoringJob) so that
- * importing this module in environments where QSTASH_TOKEN is absent (e.g.,
- * local dev without QStash) does not crash the process on module load.
+ * We defer the env-var check to call time so that importing this module in
+ * environments where QSTASH_TOKEN is absent does not crash the process on load.
  */
 function getQStashClient(): Client {
   const token = process.env.QSTASH_TOKEN;
@@ -34,43 +33,89 @@ function getQStashClient(): Client {
   return new Client({ token });
 }
 
-// ---------------------------------------------------------------------------
-// Publisher
-// ---------------------------------------------------------------------------
-
-/**
- * Publishes a scoring job to QStash.
- *
- * QStash will make an authenticated POST request to
- * `${APP_URL}/api/queue/score`, which is verified and handled by
- * `verifySignatureAppRouter` in the receiver route.
- *
- * @throws {Error} If QSTASH_TOKEN or APP_URL env vars are missing.
- * @throws {Error} If the QStash API call itself fails (network / auth).
- *
- * @example
- * ```typescript
- * import { triggerScoringJob } from '@/lib/queue/qstashClient';
- * await triggerScoringJob(); // fire-and-forget from the publisher's perspective
- * ```
- */
-export async function triggerScoringJob(): Promise<void> {
+/** Validates APP_URL and returns it. Throws if missing. */
+function requireAppUrl(): string {
   const appUrl = process.env.APP_URL;
-
   if (!appUrl) {
     throw new Error(
       '[qstashClient] CRITICAL: APP_URL environment variable is not set. ' +
         'QStash needs the absolute URL of the receiver endpoint.',
     );
   }
+  return appUrl;
+}
 
-  const client = getQStashClient();
+// ---------------------------------------------------------------------------
+// Publishers
+// ---------------------------------------------------------------------------
+
+/**
+ * Publishes a scoring job to QStash.
+ *
+ * QStash will POST to `${APP_URL}/api/queue/score`, verified by
+ * `verifySignatureAppRouter`. No payload — the receiver is self-contained.
+ *
+ * @throws {Error} If QSTASH_TOKEN or APP_URL env vars are missing.
+ */
+export async function triggerScoringJob(): Promise<void> {
+  const appUrl  = requireAppUrl();
+  const client  = getQStashClient();
   const destination = `${appUrl}/api/queue/score`;
 
   await client.publishJSON({
     url:  destination,
-    body: {}, // Receiver is self-contained — no payload required.
+    body: {},
   });
 
-  console.info(`[qstashClient] Scoring job successfully published to QStash → ${destination}`);
+  console.info(`[qstashClient] Scoring job published → ${destination}`);
 }
+
+// ---------------------------------------------------------------------------
+
+/** Payload shape sent to /api/queue/message */
+export interface MessageJobPayload {
+  /** Supabase candidate UUID. */
+  candidateId: string;
+  /** Optional custom message text. Null if the template default should be used. */
+  customMessage: string | null;
+}
+
+/**
+ * Schedules a candidate message job via QStash with a specified delay.
+ *
+ * QStash will POST to `${APP_URL}/api/queue/message` after `delaySeconds`.
+ * This serialises concurrent messages to respect HH.ru rate limits.
+ *
+ * @param candidateId   - Supabase UUID of the candidate to message.
+ * @param customMessage - Optional override text; null = use default template.
+ * @param delaySeconds  - Seconds QStash waits before delivering the job.
+ *                        Increment by 5 per candidate to serialise the batch.
+ *
+ * @throws {Error} If QSTASH_TOKEN or APP_URL env vars are missing.
+ * @throws {Error} If the QStash API call itself fails.
+ */
+export async function triggerMessageJob(
+  candidateId: string,
+  customMessage: string | null,
+  delaySeconds: number,
+): Promise<void> {
+  const appUrl  = requireAppUrl();
+  const client  = getQStashClient();
+  const destination = `${appUrl}/api/queue/message`;
+
+  const body: MessageJobPayload = { candidateId, customMessage };
+
+  await client.publishJSON({
+    url:   destination,
+    body,
+    // QStash delay format: bigint followed by "s" (seconds). The SDK type is
+    // `${bigint}s` — Math.trunc ensures no decimal before the BigInt cast.
+    delay: `${BigInt(Math.trunc(delaySeconds))}s`,
+  });
+
+  console.info(
+    `[qstashClient] Message job published → ${destination} ` +
+    `(candidateId=${candidateId}, delay=${delaySeconds}s)`,
+  );
+}
+

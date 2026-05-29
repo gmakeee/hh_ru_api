@@ -1,24 +1,74 @@
 import { supabaseAdmin } from '@/lib/supabase/adminClient';
-import CandidateRow, { type Candidate } from './CandidateRow';
+import CandidateTable from './CandidateTable';
+import CandidateFilters from './CandidateFilters';
+import { type Candidate } from './CandidateRow';
 
+// ─── Constants ────────────────────────────────────────────────────────────────
 
-export default async function DashboardPage() {
+const PAGE_SIZE = 50;
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+/**
+ * Safely parses an integer from a searchParam string.
+ * Returns `defaultVal` on NaN, and clamps to [min, max].
+ */
+function safeInt(raw: string | undefined, defaultVal: number, min = 0, max = Infinity): number {
+  const n = Number(raw);
+  if (!Number.isFinite(n) || !Number.isInteger(n)) return defaultVal;
+  return Math.max(min, Math.min(max, n));
+}
+
+// ─── Page ─────────────────────────────────────────────────────────────────────
+
+interface PageProps {
+  // Next.js 15/16: searchParams is a Promise — must be awaited.
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}
+
+export default async function DashboardPage({ searchParams }: PageProps) {
+  // Await the searchParams promise before reading values
+  const params = await searchParams;
+
+  // ── Parse & validate URL params with safe defaults ─────────────────────
+  const page      = safeInt(params.page      as string, 1,  1, 10_000);
+  const score_min = safeInt(params.score_min as string, 0,  0, 100);
+  const tech_min  = safeInt(params.tech_min  as string, 0,  0, 100);
+  const soft_min  = safeInt(params.soft_min  as string, 0,  0, 100);
+  const exp_min   = safeInt(params.exp_min   as string, 0,  0, 100);
+
+  const from = (page - 1) * PAGE_SIZE;
+  const to   = from + PAGE_SIZE - 1;
+
+  // ── Supabase query: filtered + paginated + counted ─────────────────────
   let candidates: Candidate[] = [];
-  let fetchError = null;
+  let totalCount = 0;
+  let fetchError: string | null = null;
 
   try {
-    // Edge Case 2: Database Failure on Fetch
-    const { data, error } = await supabaseAdmin
+    let query = supabaseAdmin
       .from('candidates')
-      .select('*')
-      .order('created_at', { ascending: false });
+      .select('*', { count: 'exact' })
+      .order('created_at', { ascending: false })
+      .range(from, to);
+
+    // Apply filters only when above the zero default (skip clause if 0)
+    if (score_min > 0) query = query.gte('score',      score_min);
+    if (tech_min  > 0) query = query.gte('score_tech', tech_min);
+    if (soft_min  > 0) query = query.gte('score_soft', soft_min);
+    if (exp_min   > 0) query = query.gte('score_exp',  exp_min);
+
+    const { data, error, count } = await query;
 
     if (error) throw error;
-    candidates = data || [];
+    candidates = (data as Candidate[]) || [];
+    totalCount = count ?? 0;
   } catch (err: any) {
     fetchError = err.message;
     console.error('[Dashboard] Database fetch failed:', err);
   }
+
+  // ─────────────────────────────────────────────────────────────────────────
 
   return (
     <div className="space-y-6">
@@ -31,7 +81,7 @@ export default async function DashboardPage() {
         </div>
       </div>
 
-      {/* Edge Case 2: Критическая ошибка загрузки БД */}
+      {/* Edge Case 2: Critical DB failure */}
       {fetchError && (
         <div className="p-4 rounded-lg bg-red-950/30 border border-red-900/50 text-red-400 shadow-sm">
           <h3 className="font-semibold mb-1">Critical Error</h3>
@@ -39,8 +89,8 @@ export default async function DashboardPage() {
         </div>
       )}
 
-      {/* Edge Case 1: Пустое состояние (Empty State) */}
-      {!fetchError && candidates.length === 0 && (
+      {/* Edge Case 1: Never-synced empty state (no filters active) */}
+      {!fetchError && totalCount === 0 && score_min === 0 && tech_min === 0 && soft_min === 0 && exp_min === 0 && (
         <div className="p-16 text-center rounded-2xl bg-zinc-900/30 border border-zinc-800 border-dashed">
           <div className="w-12 h-12 bg-zinc-800 rounded-full flex items-center justify-center mx-auto mb-4">
             <span className="text-zinc-500">⏳</span>
@@ -52,28 +102,31 @@ export default async function DashboardPage() {
         </div>
       )}
 
-      {/* Таблица кандидатов */}
-      {!fetchError && candidates.length > 0 && (
-        <div className="bg-zinc-900 border border-zinc-800 rounded-xl shadow-lg overflow-hidden">
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-sm whitespace-nowrap">
-              <thead className="bg-zinc-950/50 text-zinc-400 border-b border-zinc-800">
-                <tr>
-                  <th className="px-6 py-4 font-medium tracking-wide">ID / Resume</th>
-                  <th className="px-6 py-4 font-medium tracking-wide">Status</th>
-                  <th className="px-6 py-4 font-medium tracking-wide">AI Score</th>
-                  <th className="px-6 py-4 font-medium tracking-wide w-full min-w-[300px]">Evaluation Summary</th>
-                  <th className="px-6 py-4 font-medium tracking-wide text-right">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-zinc-800/50 text-zinc-300">
-                {candidates.map((candidate) => (
-                  <CandidateRow key={candidate.id} candidate={candidate} />
-                ))}
-              </tbody>
-            </table>
+      {/* Filters + pagination bar (shown whenever data fetched without error) */}
+      {!fetchError && (
+        <CandidateFilters
+          totalCount={totalCount}
+          currentPage={page}
+          pageSize={PAGE_SIZE}
+        />
+      )}
+
+      {/* Edge Case 3: Filters too strict — results exist but this page is empty */}
+      {!fetchError && totalCount === 0 && (score_min > 0 || tech_min > 0 || soft_min > 0 || exp_min > 0) && (
+        <div className="p-12 text-center rounded-2xl bg-zinc-900/30 border border-zinc-800 border-dashed">
+          <div className="w-12 h-12 bg-zinc-800 rounded-full flex items-center justify-center mx-auto mb-4">
+            <span className="text-zinc-500">🔍</span>
           </div>
+          <h3 className="text-lg font-medium text-white mb-1">No Candidates Match These Filters</h3>
+          <p className="text-sm text-zinc-500">
+            Try lowering the score thresholds or clearing the filters.
+          </p>
         </div>
+      )}
+
+      {/* Candidate table */}
+      {!fetchError && candidates.length > 0 && (
+        <CandidateTable initialCandidates={candidates} />
       )}
     </div>
   );

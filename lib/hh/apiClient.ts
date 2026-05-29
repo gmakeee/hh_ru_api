@@ -167,4 +167,30 @@ export class HhApiService {
       body: JSON.stringify(body),
     });
   }
+
+  /**
+   * Sends a chat message to a candidate in an existing negotiation thread.
+   *
+   * Endpoint: POST https://api.hh.ru/negotiations/{negotiationId}/messages
+   *
+   * The HH.ru API expects application/x-www-form-urlencoded for this endpoint.
+   * The message text is sent as the `message` field.
+   *
+   * @param negotiationId - The HH.ru negotiation ID whose thread receives the message.
+   * @param text          - The message body to send to the candidate.
+   * @throws {HhAuthError}  On 401/403 — token expired or insufficient employer permissions.
+   * @throws {Error}        On other HTTP errors or network failures.
+   */
+  async sendMessage(negotiationId: string, text: string): Promise<void> {
+    const url = `${this.baseUrl}/negotiations/${negotiationId}/messages`;
+
+    // HH.ru messages endpoint requires form-encoded body
+    const formBody = new URLSearchParams({ message: text });
+
+    await this.fetchWithRetry(url, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body:    formBody.toString(),
+    });
+  }
 }

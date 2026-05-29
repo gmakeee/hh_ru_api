@@ -23,10 +23,16 @@ export interface Candidate {
   score_exp: number | null;
   /** AI-generated interview questions targeting candidate weak areas. Null for legacy evaluations. */
   interview_questions: string[] | null;
+  /** Message dispatch state. Null = no message action taken yet. */
+  message_status: 'queued' | 'sent' | 'failed' | null;
 }
 
 interface Props {
   candidate: Candidate;
+  /** Whether this row's checkbox is currently checked. Controlled by CandidateTable. */
+  isSelected: boolean;
+  /** Called when the checkbox changes. CandidateTable updates selectedIds. */
+  onToggle: (id: string) => void;
 }
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
@@ -90,9 +96,16 @@ function ScoreBar({ label, value, colorClass }: ScoreBarProps) {
   );
 }
 
+// Message status icon map — mirrors the one exported from CandidateTable
+const MESSAGE_STATUS_ICON: Record<NonNullable<Candidate['message_status']>, string> = {
+  queued: '⏳',
+  sent:   '✅',
+  failed: '❌',
+};
+
 // ─── Main component ───────────────────────────────────────────────────────────
 
-export default function CandidateRow({ candidate }: Props) {
+export default function CandidateRow({ candidate, isSelected, onToggle }: Props) {
   const [isExpanded, setIsExpanded] = useState(false);
 
   const resumeId =
@@ -110,11 +123,35 @@ export default function CandidateRow({ candidate }: Props) {
   return (
     <>
       {/* ── Main row ─────────────────────────────────────────────────────── */}
-      <tr className="hover:bg-zinc-800/20 transition-colors">
+      <tr
+        className={`transition-colors ${
+          isSelected ? 'bg-indigo-950/20 hover:bg-indigo-950/30' : 'hover:bg-zinc-800/20'
+        }`}
+      >
+        {/* Checkbox */}
+        <td className="pl-6 pr-3 py-4 align-middle">
+          <input
+            type="checkbox"
+            aria-label={`Select candidate ${candidate.hh_negotiation_id}`}
+            checked={isSelected}
+            onChange={() => onToggle(candidate.id)}
+            className="w-4 h-4 rounded border-zinc-600 bg-zinc-800 text-indigo-500
+                       focus:ring-indigo-500/30 focus:ring-2 cursor-pointer accent-indigo-500"
+          />
+        </td>
+
         {/* ID / Resume */}
-        <td className="px-6 py-4">
-          <div className="font-mono text-xs text-zinc-400 mb-1">
-            #{candidateName}
+        <td className="px-4 py-4">
+          <div className="flex items-center gap-1.5 font-mono text-xs text-zinc-400 mb-1">
+            <span>#{candidateName}</span>
+            {candidate.message_status && (
+              <span
+                title={`Message: ${candidate.message_status}`}
+                className="text-base leading-none"
+              >
+                {MESSAGE_STATUS_ICON[candidate.message_status]}
+              </span>
+            )}
           </div>
           {resumeId ? (
             <a
@@ -211,8 +248,8 @@ export default function CandidateRow({ candidate }: Props) {
       {/* ── Expanded detail row ───────────────────────────────────────────── */}
       {isExpanded && (
         <tr className="bg-zinc-900/60 border-t border-zinc-800/50">
-          {/* Span all 5 columns */}
-          <td colSpan={5} className="px-6 py-4">
+          {/* Span all 6 columns (including the new checkbox column) */}
+          <td colSpan={6} className="px-6 py-4">
             {hasMultiCriteria ? (
               <div className="space-y-6">
 
