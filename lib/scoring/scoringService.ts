@@ -1,4 +1,7 @@
 import { supabaseAdmin } from '@/lib/supabase/adminClient';
+import { anonymizeCandidateData } from '@/lib/security/anonymizer';
+import { HhApiService } from '@/lib/hh/apiClient';
+import { getValidAccessToken } from '@/lib/hh/tokenManager';
 
 // OpenRouter Interfaces для строгой типизации
 interface OpenRouterMessage {
@@ -24,8 +27,18 @@ interface OpenRouterResponse {
 }
 
 interface CandidateScoringResult {
+  /** Overall composite score (0-100). */
   score: number;
+  /** Free-text evaluation summary. */
   summary: string;
+  /** Technical skills score (0-100). Maps to DB column: score_tech. */
+  tech_skills: number;
+  /** Soft skills score (0-100). Maps to DB column: score_soft. */
+  soft_skills: number;
+  /** Experience match score (0-100). Maps to DB column: score_exp. */
+  experience_match: number;
+  /** Exactly 3 personalised technical interview questions targeting weak areas. */
+  interview_questions: string[];
 }
 
 /**
@@ -49,11 +62,13 @@ export async function runScoringPipeline(): Promise<void> {
   await logSystemEvent('info', 'Starting runScoringPipeline.');
 
   try {
-    // 1. Fetch Config: Получаем системный промпт через JOIN
+    // 1. Fetch Config: системный промпт + настройки авто-отказа через JOIN
     const { data: appSettings, error: configError } = await supabaseAdmin
       .from('app_settings')
       .select(`
         active_prompt_id,
+        auto_reject_enabled,
+        auto_reject_threshold,
         prompts (
           id,
           prompt_text
@@ -62,12 +77,18 @@ export async function runScoringPipeline(): Promise<void> {
       .eq('id', 1)
       .maybeSingle();
 
-    const activePromptId = appSettings?.active_prompt_id;
-    const masterPrompt = (appSettings?.prompts as any)?.prompt_text;
+    const activePromptId      = appSettings?.active_prompt_id;
+    const masterPrompt        = (appSettings?.prompts as any)?.prompt_text;
+    const autoRejectEnabled   = (appSettings as any)?.auto_reject_enabled  as boolean ?? false;
+    const autoRejectThreshold = (appSettings as any)?.auto_reject_threshold as number ?? 30;
 
     if (configError || !appSettings || !activePromptId || !masterPrompt) {
       throw new Error('active_prompt is missing in app_settings or database error occurred.');
     }
+
+    // 2. Initialize HH client (token validated / refreshed by tokenManager)
+    const hhAccessToken = await getValidAccessToken();
+    const hhService     = new HhApiService(hhAccessToken);
 
     // 2. Fetch API Key
     const openRouterApiKey = process.env.OPENROUTER_API_KEY;
@@ -107,11 +128,24 @@ export async function runScoringPipeline(): Promise<void> {
 
         // LLM Payload Construction
         // Инструктируем модель возвращать СТРОГО JSON
-        const systemPrompt = `${masterPrompt}\n\nCRITICAL INSTRUCTION: You must return ONLY valid JSON containing two fields: "score" (a number) and "summary" (a string). Do not wrap the JSON in markdown blocks (like \`\`\`json) or include any other text.`;
-        
+        const systemPrompt = `${masterPrompt}\n\nCRITICAL INSTRUCTION: You must return ONLY valid JSON containing exactly six fields:\n- "score" (number, 0-100): overall composite score\n- "summary" (string): concise evaluation summary\n- "tech_skills" (number, 0-100): technical skills assessment\n- "soft_skills" (number, 0-100): communication, teamwork, attitude\n- "experience_match" (number, 0-100): relevance of past experience to the role\n- "interview_questions" (array of exactly 3 strings): personalised technical questions targeting the candidate's weakest areas\nExample: {"score": 72, "summary": "...", "tech_skills": 80, "soft_skills": 65, "experience_match": 70, "interview_questions": ["Question 1?", "Question 2?", "Question 3?"]}\nDo not wrap the JSON in markdown blocks (like \`\`\`json) or include any other text.`;
+
+        // Security Step 1.1 — Anonymize PII before data leaves our servers.
+        // raw_cv_data / raw_chat_history in the DB are NEVER touched here;
+        // we only anonymize the in-transit copy sent to OpenRouter.
+        let anonymizedPayload: ReturnType<typeof anonymizeCandidateData>;
+        try {
+          anonymizedPayload = anonymizeCandidateData(
+            candidate.raw_cv_data,
+            candidate.raw_chat_history,
+          );
+        } catch {
+          throw new Error('Anonymization failed: could not sanitize candidate data before LLM submission.');
+        }
+
         const userData = JSON.stringify({
-          messages: candidate.raw_data?.messages || [],
-          resume: candidate.raw_data?.resume || null
+          messages: anonymizedPayload.messages,
+          resume: anonymizedPayload.resume,
         });
 
         const requestPayload: OpenRouterRequest = {
@@ -156,21 +190,72 @@ export async function runScoringPipeline(): Promise<void> {
           const cleanedOutput = rawLlmOutput.replace(/```json/gi, '').replace(/```/g, '').trim();
           parsedResult = JSON.parse(cleanedOutput);
           
-          if (typeof parsedResult.score !== 'number' || typeof parsedResult.summary !== 'string') {
-             throw new Error('Parsed JSON does not contain the required "score" (number) or "summary" (string) fields.');
+          if (
+            typeof parsedResult.score            !== 'number' ||
+            typeof parsedResult.summary          !== 'string' ||
+            typeof parsedResult.tech_skills      !== 'number' ||
+            typeof parsedResult.soft_skills      !== 'number' ||
+            typeof parsedResult.experience_match !== 'number'
+          ) {
+            throw new Error(
+              'Parsed JSON is missing required multi-criteria score fields. ' +
+              'Expected: score (number), summary (string), tech_skills (number), ' +
+              'soft_skills (number), experience_match (number).'
+            );
+          }
+
+          // Validate interview_questions: must be an array of exactly 3 strings.
+          const iq = parsedResult.interview_questions;
+          if (
+            !Array.isArray(iq) ||
+            iq.length !== 3 ||
+            !iq.every((q) => typeof q === 'string')
+          ) {
+            throw new Error(
+              'Expected exactly 3 interview questions as an array of strings, ' +
+              `but received: ${JSON.stringify(iq)}`
+            );
           }
         } catch (parseError: any) {
           throw new Error(`Failed to parse LLM output as JSON: ${parseError.message}.`);
         }
 
-        // Успешное обновление статуса
+        // 6. Auto-Reject branch — evaluated only when feature is enabled
+        const shouldAutoReject =
+          autoRejectEnabled && parsedResult.score < autoRejectThreshold;
+
+        if (shouldAutoReject) {
+          // Attempt HH API rejection — failure is non-fatal for the pipeline.
+          try {
+            // candidate.hh_negotiation_id is the HH response/отклик ID.
+            await hhService.rejectCandidate(candidate.hh_negotiation_id);
+          } catch (rejectError: any) {
+            // Edge Case: HH rejection API failed (already rejected, network, etc.).
+            // Log it but do NOT propagate — we still save our scores locally.
+            await logSystemEvent(
+              'warning',
+              `Auto-reject API call failed for candidate ${candidate.id}. Saving as scored instead.`,
+              { error: rejectError.message },
+            );
+          }
+        }
+
+        // 7. Persist scores — status reflects whether rejection succeeded
+        const finalStatus = shouldAutoReject ? 'rejected' : 'scored';
+
         const { error: updateError } = await supabaseAdmin
           .from('candidates')
           .update({
-            status: 'scored',
-            score: parsedResult.score,
-            summary: parsedResult.summary,
-            prompt_id: activePromptId
+            status:               finalStatus,
+            score:                parsedResult.score,
+            summary:              parsedResult.summary,
+            // Multi-criteria scores — LLM JSON key → DB column mapping:
+            score_tech:           parsedResult.tech_skills,
+            score_soft:           parsedResult.soft_skills,
+            score_exp:            parsedResult.experience_match,
+            // JSONB column — Supabase serializes the JS array automatically:
+            interview_questions:  parsedResult.interview_questions,
+            prompt_id:            activePromptId,
           })
           .eq('id', candidate.id);
 

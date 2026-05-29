@@ -1,5 +1,6 @@
 import { supabaseAdmin } from '@/lib/supabase/adminClient';
 import { HhApiService, HhAuthError } from '@/lib/hh/apiClient';
+import { getValidAccessToken } from '@/lib/hh/tokenManager';
 import { sleep } from '@/lib/utils/sleep';
 
 /**
@@ -27,24 +28,25 @@ export async function runSyncNew(): Promise<void> {
   await logSystemEvent('info', 'Starting runSyncNew pipeline.');
 
   try {
-    // 1. Fetch Config: Получаем hh_access_token из app_settings
-    const { data: appSettings, error: configError } = await supabaseAdmin
-      .from('app_settings')
-      .select('hh_access_token')
-      .eq('id', 1)
-      .maybeSingle();
-
-    if (configError || !appSettings || !appSettings.hh_access_token) {
+    // 1. Fetch Token: Получаем валидный токен через OAuth Token Manager.
+    // Он автоматически проверит срок действия и при необходимости обновит токен.
+    let accessToken: string;
+    try {
+      accessToken = await getValidAccessToken();
+    } catch (tokenError: any) {
+      // Ловим как HhAuthError (отозванный токен, нет refresh_token),
+      // так и обычный Error (нет env-переменных, ошибка БД, сеть).
+      // В обоих случаях синхронизация невозможна — логируем и выходим.
       await logSystemEvent(
-        'error', 
-        'Failed to retrieve hh_access_token from app_settings. Run terminated.', 
-        configError || 'Token missing or empty'
+        'error',
+        'Failed to obtain a valid HH access token. Run terminated.',
+        tokenError?.message || String(tokenError),
       );
       return;
     }
 
     // 2. Initialize Client: Создаем инстанс сервиса hh.ru
-    const hhService = new HhApiService(appSettings.hh_access_token);
+    const hhService = new HhApiService(accessToken);
 
     // 3. Fetch Negotiations: Получаем список активных откликов
     const negotiations = await hhService.getNegotiations();

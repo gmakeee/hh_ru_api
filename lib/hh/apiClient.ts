@@ -142,4 +142,29 @@ export class HhApiService {
     const data = await this.fetchWithRetry(url);
     return data;
   }
+
+  /**
+   * Sends an automatic rejection for an employer-initiated negotiation.
+   *
+   * Endpoint: PUT https://api.hh.ru/negotiations/discard_by_employer/{negotiationId}
+   *
+   * @param negotiationId - The HH.ru negotiation (response/отклик) ID to reject.
+   * @param message       - Optional rejection message shown to the candidate.
+   * @throws {HhAuthError}  On 401/403 — token expired or app lacks permission.
+   * @throws {Error}        On other HTTP errors or network failures.
+   */
+  async rejectCandidate(negotiationId: string, message?: string): Promise<void> {
+    const url = `${this.baseUrl}/negotiations/discard_by_employer/${negotiationId}`;
+
+    const body: Record<string, string> = {};
+    if (message) {
+      body['message'] = message;
+    }
+
+    await this.fetchWithRetry(url, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+  }
 }

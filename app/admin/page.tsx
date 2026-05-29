@@ -1,41 +1,6 @@
 import { supabaseAdmin } from '@/lib/supabase/adminClient';
-import CandidateActionButton from './CandidateActionButton';
+import CandidateRow, { type Candidate } from './CandidateRow';
 
-interface Candidate {
-  id: string;
-  hh_negotiation_id: string;
-  status: string;
-  score: number | null;
-  summary: string | null;
-  raw_data: any;
-  created_at: string;
-  prompt_id: number | null;
-}
-
-function StatusBadge({ status }: { status: string }) {
-  let colorClass = '';
-  switch (status) {
-    case 'scored':
-      colorClass = 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20';
-      break;
-    case 'pending':
-    case 'processing':
-      colorClass = 'bg-yellow-500/10 text-yellow-400 border-yellow-500/20';
-      break;
-    case 'error':
-    case 'fatal_error':
-      colorClass = 'bg-red-500/10 text-red-400 border-red-500/20';
-      break;
-    default:
-      colorClass = 'bg-zinc-500/10 text-zinc-400 border-zinc-500/20';
-  }
-
-  return (
-    <span className={`px-2.5 py-1 rounded-full text-xs font-medium border uppercase tracking-wider ${colorClass}`}>
-      {status}
-    </span>
-  );
-}
 
 export default async function DashboardPage() {
   let candidates: Candidate[] = [];
@@ -102,70 +67,9 @@ export default async function DashboardPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-zinc-800/50 text-zinc-300">
-                {candidates.map((candidate) => {
-                  const resumeId = candidate.raw_data?.resume?.id || candidate.raw_data?.negotiation?.resume?.id;
-                  const candidateName = candidate.raw_data?.negotiation?.id || candidate.hh_negotiation_id;
-                  const resumeUrl = resumeId ? `https://hh.ru/resume/${resumeId}` : '#';
-
-                  return (
-                    <tr key={candidate.id} className="hover:bg-zinc-800/20 transition-colors">
-                      <td className="px-6 py-4">
-                        <div className="font-mono text-xs text-zinc-400 mb-1">#{candidateName}</div>
-                        {resumeId ? (
-                          <a 
-                            href={resumeUrl} 
-                            target="_blank" 
-                            rel="noreferrer"
-                            className="text-sm text-blue-400 hover:text-blue-300 transition-colors"
-                          >
-                            View Resume ↗
-                          </a>
-                        ) : (
-                          <span className="text-sm text-zinc-500">No Resume Link</span>
-                        )}
-                      </td>
-                      <td className="px-6 py-4">
-                        <StatusBadge status={candidate.status} />
-                      </td>
-                      <td className="px-6 py-4">
-                        {candidate.score !== null ? (
-                          <div>
-                            <div className="flex items-baseline gap-1 mb-1">
-                              <span className="font-bold text-lg text-white">{candidate.score}</span>
-                              <span className="text-xs text-zinc-500">/100</span>
-                            </div>
-                            {candidate.prompt_id && (
-                              <div className="text-[10px] text-purple-400 font-mono bg-purple-500/10 inline-block px-1.5 py-0.5 rounded border border-purple-500/20">
-                                PROMPT #{candidate.prompt_id}
-                              </div>
-                            )}
-                          </div>
-                        ) : (
-                          <span className="text-zinc-600 font-medium">-</span>
-                        )}
-                      </td>
-                      <td className="px-6 py-4 whitespace-normal">
-                        {/* Summary Column with line-clamp */}
-                        <div className="max-w-md lg:max-w-xl">
-                          {candidate.summary ? (
-                            <p className="text-zinc-400 text-sm line-clamp-2 leading-relaxed" title={candidate.summary}>
-                              {candidate.summary}
-                            </p>
-                          ) : (
-                            <span className="text-zinc-600 italic text-sm">Waiting for evaluation...</span>
-                          )}
-                        </div>
-                      </td>
-                      <td className="px-6 py-4 text-right align-middle">
-                        {/* Client Component Button */}
-                        <CandidateActionButton 
-                          candidateId={candidate.id} 
-                          status={candidate.status} 
-                        />
-                      </td>
-                    </tr>
-                  );
-                })}
+                {candidates.map((candidate) => (
+                  <CandidateRow key={candidate.id} candidate={candidate} />
+                ))}
               </tbody>
             </table>
           </div>

@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { supabaseAdmin } from '@/lib/supabase/adminClient';
 import { runSyncNew } from '@/lib/sync/syncService';
-import { runScoringPipeline } from '@/lib/scoring/scoringService';
+import { triggerScoringJob } from '@/lib/queue/qstashClient';
 
 // Define the expected request payload structure
 interface SyncRequestPayload {
@@ -58,7 +58,7 @@ export async function POST(request: Request) {
         // TODO: В будущем этот режим может игнорировать проверку наличия в БД для форсированного обновления всех данных.
         // Для MVP работаем аналогично sync_new.
         await runSyncNew();
-        await runScoringPipeline();
+        await triggerScoringJob();
         break;
         
       case 'sync_new':
@@ -66,16 +66,16 @@ export async function POST(request: Request) {
         // Стандартный пайплайн
         // 1. Скачиваем новые отклики с hh.ru и кладем в БД со статусом pending
         await runSyncNew();
-        // 2. Сразу берем батч из 5 (максимум) pending кандидатов и прогоняем через LLM
-        await runScoringPipeline();
+        // 2. Публикуем задачу в QStash — он вызовет /api/queue/score асинхронно
+        await triggerScoringJob();
         break;
         
       case 'retry_errors':
         console.log('[sync-hh] Triggered mode: retry_errors');
         // Пайплайн восстановления:
-        // Нам не нужно обращаться к HH API, достаточно просто дернуть скоринг,
-        // так как он сам цепляет кандидатов со статусом 'error' и retry_count < 3
-        await runScoringPipeline();
+        // Нам не нужно обращаться к HH API, достаточно просто опубликовать задачу —
+        // скоринг сам цепляет кандидатов со статусом 'error' и retry_count < 3
+        await triggerScoringJob();
         break;
         
       default:

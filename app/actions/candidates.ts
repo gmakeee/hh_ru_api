@@ -1,7 +1,7 @@
 'use server';
 
 import { supabaseAdmin } from '@/lib/supabase/adminClient';
-import { runScoringPipeline } from '@/lib/scoring/scoringService';
+import { triggerScoringJob } from '@/lib/queue/qstashClient';
 import { revalidatePath } from 'next/cache';
 
 export async function forceScoreCandidate(candidateId: string) {
@@ -20,15 +20,13 @@ export async function forceScoreCandidate(candidateId: string) {
       return { success: false, message: 'Database Error: Failed to reset candidate status.' };
     }
 
-    // 2. Принудительный запуск пайплайна
-    // Edge Case 3 (Action Timeout/Failure): Перехватываем ошибки внутри самого пайплайна
+    // 2. Публикуем задачу в QStash — он асинхронно запустит LLM-скоринг через /api/queue/score
     try {
-      // Это вызовет пайплайн, который немедленно найдет нашего 'pending' кандидата
-      await runScoringPipeline();
-    } catch (pipelineError: any) {
-      // Логируем в консоль Vercel, но возвращаем красивую ошибку клиенту
-      console.error('[forceScoreCandidate] Scoring pipeline failed during manual trigger:', pipelineError);
-      return { success: false, message: 'LLM Pipeline Failed. Check system logs.' };
+      await triggerScoringJob();
+    } catch (publishError: any) {
+      // Логируем в консоль Vercel, но возвращаем чистую ошибку клиенту
+      console.error('[forceScoreCandidate] Failed to publish scoring job to QStash:', publishError);
+      return { success: false, message: 'Failed to enqueue scoring job. Please try again.' };
     }
 
     // 3. Инвалидация кэша для обновления UI таблицы
